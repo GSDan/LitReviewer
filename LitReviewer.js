@@ -3,10 +3,12 @@ const parse = require('csv-parse/lib/sync');
 const { Parser }  = require('json2csv');
 
 const combinedCsv = './combined.csv'
+const acceptedCsv = './accepted.csv'
 const authorsCsv = './authors.csv'
 const sourceFolder = './reviews/'
 let combinedReviews = {};
-let csvData = [];
+let combinedCsvData = [];
+let acceptedCsvData = [];
 let authors = {};
 
 let paperFields = ['Paper #', 'Title', 'Authors', 'Year', 'Pdf'];
@@ -40,6 +42,7 @@ let reviewFields = [
     { label: '5a Specify', value: '5a Specify', default: '' },
     { label: '5b - General comments', value: '5b', default: '' },
 ]
+const compareFields = ['1a','1b','1c','1d','2a','2b','2c','2d','3a','3b','3c','3d','3e','4a','4b','4c','5a']
 
 function writeToFile(filename, data)
 {
@@ -146,6 +149,7 @@ async function readReviews(filename)
             let count = 0;
             let totalScore = 0;
             let numReviews = Object.keys(dataCopy.Reviews).length;
+            let reviewerRows = [];
             
             if(!!dataCopy.Reviews && numReviews > 0)
             {
@@ -156,7 +160,9 @@ async function readReviews(filename)
                 for(const reviewer in combinedReviews[paper].Reviews)
                 {
                     let review = combinedReviews[paper].Reviews[reviewer];
-                    csvData.push({...dataCopy, ...combinedReviews[paper].Reviews[reviewer]});
+                    let reviewData = {...dataCopy, ...combinedReviews[paper].Reviews[reviewer]};
+                    combinedCsvData.push(reviewData);
+                    reviewerRows.push(reviewData)
                     count++;
                     totalScore += review['5a'].includes("5a.1") ? 3 : review['5a'].includes("5a.2") ? 2 : 1;
                     agreed = agreed && (review.Decision.includes("0.1") == decision.includes("0.1"));
@@ -171,11 +177,48 @@ async function readReviews(filename)
             delete dataCopy.Reviews;
             let message = !decision ? "NOT REVIEWED" : forced ? "EXECUTIVE DECISION BY " + forced : count < 2 ? "NEEDS CONFIRMING" : !agreed ? "DISAGREEMENT" : "AGREED"
             dataCopy[paperFields[0]] = 'RESULT ' + dataCopy[paperFields[0]];
-            csvData.push({...dataCopy, ...{'Reviewer' : message, 'Decision' : (agreed && count >=2) || forced ? decision.includes("0.1") ? "ACCEPTED" : "REJECTED" : 'WAITING'}})
+
+            let decisionRes = (agreed && count >=2) || forced ? decision.includes("0.1") ? "ACCEPTED" : "REJECTED" : 'WAITING'
+
+            combinedCsvData.push({...dataCopy, ...{'Reviewer' : message, 'Decision' : decisionRes}})
 
             if(((agreed && count >=2) || forced) && decision && decision.includes("0.1"))
             {
-                // paper accepted for inclusion, add/update author stats
+                // paper accepted for inclusion
+                let codes = {}
+                let firstReviewer = true;
+                reviewerRows.forEach(rev => {
+                    acceptedCsvData.push(rev);
+
+                    for(key in rev)
+                    {
+                        if(compareFields.includes(key) && rev[key].includes(key))
+                        {
+                            let code = rev[key].split(key + '.').pop();
+                            if(code)
+                            {
+                                code = key + '.' + code.charAt(0);
+                                if(firstReviewer)
+                                {
+                                    codes[key] = code;
+                                }
+                                else
+                                {
+                                    if(codes[key] != code)
+                                    {
+                                        codes[key] = 'MISMATCH'
+                                    }
+                                }
+                            }
+                        }
+
+                    }
+                    firstReviewer = false;
+                });
+
+                acceptedCsvData.push({...dataCopy, ...{'Reviewer' : message, 'Decision' : decisionRes}, ...codes})
+                
+                //add/update author stats
                 let paperScore = totalScore / numReviews;
                 let paperAuthors = dataCopy.Authors.split(";");
 
@@ -209,9 +252,13 @@ async function readReviews(filename)
         const authorsCsvData = authors2csvParser.parse(authorsArr);
         writeToFile(authorsCsv, authorsCsvData)
 
+        // combined CSV
         const json2csvParser = new Parser({ fields: paperFields.concat(reviewFields), defaultValue : " ", includeEmptyRows : true });
-        const csv = json2csvParser.parse(csvData);
-        writeToFile(combinedCsv, csv);
+        writeToFile(combinedCsv, json2csvParser.parse(combinedCsvData));
+
+        // accepted papers only CSV
+        writeToFile(acceptedCsv, json2csvParser.parse(acceptedCsvData));
+
         console.log("Done!")
     } 
     catch (error) 
